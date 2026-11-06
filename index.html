@@ -82,11 +82,15 @@ html{-webkit-text-size-adjust:100%;text-size-adjust:100%}
 /* Flashcard 3D */
 .flashcard{background:none;border:0;box-shadow:none;overflow:visible;perspective:1600px;min-height:0}
 .flashcard:before{display:none}
-.flash-inner{display:grid;transform-style:preserve-3d;transition:transform .7s var(--ease-out);transform:translateY(var(--lift,0)) rotateY(var(--rot,0deg))}
+.flash-inner{display:grid;transform-style:preserve-3d;-webkit-transform-style:preserve-3d;transition:transform .7s cubic-bezier(.65,0,.35,1);transform:translateY(var(--lift,0)) rotateY(var(--rot,0deg))}
 .flashcard.is-flipped{--rot:180deg}
 .flash-face{grid-area:1/1;position:relative;overflow:hidden;background:var(--paper);border:1px solid var(--line);border-radius:22px;box-shadow:var(--shadow);min-height:340px;-webkit-backface-visibility:hidden;backface-visibility:hidden;transition:box-shadow .35s var(--ease-out)}
 .flash-face:before{content:"";position:absolute;inset:0 0 auto 0;height:5px;background:var(--green)}
-.flash-face.back{transform:rotateY(180deg)}
+.flash-face.front{transform:rotateY(0deg) translateZ(1px)}
+.flash-face.back{transform:rotateY(180deg) translateZ(1px)}
+/* Safari safety: hide the face turned away at the midpoint of the flip, independent of backface-visibility */
+.flash-face{transition:box-shadow .35s var(--ease-out),visibility 0s linear .35s}
+.flashcard.is-flipped .flash-face.front,.flashcard:not(.is-flipped) .flash-face.back{visibility:hidden}
 .flash-face.back:before{background:var(--orange)}
 .flash-face[inert]{pointer-events:none}
 .flash-face .flip-area{cursor:pointer}
@@ -207,6 +211,20 @@ mark.term-hit{background:none;color:inherit;border-bottom:3px solid var(--orange
  .word-pop .wp-save{min-height:44px;padding:10px 14px;font-size:14px}
 }
 @keyframes sheet-in{from{transform:translateY(100%)}to{transform:none}}
+
+/* ===== Vocab tab pronunciation ===== */
+.say-btn{width:38px;height:38px;border:1px solid var(--line);border-radius:50%;background:var(--paper);display:inline-grid;place-items:center;color:var(--green);flex-shrink:0;transition:background-color .2s,transform .2s}
+.say-btn svg{width:18px;height:18px}
+.say-btn.speaking{background:var(--mint);border-color:#a1bfa6;transform:scale(1.06)}
+@media(hover:hover){.say-btn:hover{background:var(--mint)}}
+.flash-top .ft-actions{display:flex;align-items:center;gap:6px}
+.vocab-table .say-btn{width:32px;height:32px}
+.vocab-table .say-btn svg{width:15px;height:15px}
+.autosay{border:1px solid var(--line);background:var(--paper);border-radius:999px;padding:6px 12px;font-size:12px;font-weight:600;color:var(--muted);display:inline-flex;align-items:center;gap:6px;min-height:36px}
+.autosay svg{width:15px;height:15px}
+.autosay[aria-pressed=true]{background:var(--mint);color:var(--dark);border-color:#a1bfa6}
+.flash-nav .nav-right{display:flex;align-items:center;gap:8px;flex-wrap:wrap;justify-content:flex-end}
+@media(max-width:700px){.say-btn{width:44px;height:44px}.vocab-table .say-btn{width:40px;height:40px}.autosay{min-height:44px;font-size:13px}}
 </style></head>
 <body>
 <a class="skip" href="#content">Đến nội dung</a>
@@ -449,7 +467,7 @@ const GOOD=['#1c6557','#3f9a7f','#a7d0ad','#c9a43a','#c66436'];
 
 /* ---------- Wrap actions ---------- */
 const _flip=actions.flip;
-actions.flip=function(d){flipAnim=true;_flip.call(this,d);const b=q('.flash-face:not([inert]) .flip-area');if(b)b.focus({preventScroll:true});};
+actions.flip=function(d){flipAnim=true;_flip.call(this,d);const f=()=>{const b=q('.flash-face:not([inert]) .flip-area');if(b)b.focus({preventScroll:true});};f();setTimeout(f,motionOK()?380:0);};
 const _rate=actions.rate;
 actions.rate=function(d){
   const b=q(`[data-action=rate][data-status="${d.status}"]`);
@@ -771,12 +789,52 @@ window.addEventListener('resize',()=>closePop(false));
 document.addEventListener('scroll',e=>{if(pop&&window.innerWidth>700)closePop(false);},true);
 if(canSpeak&&speechSynthesis.onvoiceschanged!==undefined)speechSynthesis.onvoiceschanged=()=>{};
 
+
+/* ---- Pronunciation in the Vocab tab ---- */
+const AUTO_KEY='amy-vstep-autosay';let lastAuto=null;
+const autoOn=()=>{try{return localStorage.getItem(AUTO_KEY)==='1';}catch(e){return false;}};
+function sayBtn(id,small){const v=DATA.vocab[id];return `<button type="button" class="say-btn" data-say="${id}" aria-label="Nghe phát âm ${esc(v.term)}" title="Nghe phát âm">${speakerSVG}</button>`;}
+function vocabSpeak(){
+  if(!canSpeak||view!=='vocab')return;
+  qa('.flash-face').forEach(face=>{
+    const top=face.querySelector('.flash-top'),star=top&&top.querySelector('[data-action=star]');
+    if(!star||top.querySelector('.say-btn'))return;
+    const wrap=document.createElement('div');wrap.className='ft-actions';star.replaceWith(wrap);
+    wrap.insertAdjacentHTML('beforeend',sayBtn(+star.dataset.id));wrap.appendChild(star);
+  });
+  qa('.vocab-table [data-action=star]').forEach(star=>{
+    if(star.parentElement.querySelector('.say-btn'))return;
+    star.insertAdjacentHTML('afterend',sayBtn(+star.dataset.id,true));
+  });
+  const nav=q('.flash-nav');
+  if(nav&&!nav.querySelector('.autosay')){
+    const shuffle=nav.querySelector('[data-action=shuffle]');
+    const right=document.createElement('div');right.className='nav-right';
+    const on=autoOn();
+    right.innerHTML=`<button type="button" class="autosay" data-autosay aria-pressed="${on}" title="Tự đọc từ khi chuyển thẻ">${speakerSVG}Tự đọc</button>`;
+    if(shuffle){shuffle.replaceWith(right);right.appendChild(shuffle);}else nav.appendChild(right);
+  }
+  /* auto-read only when the card actually changes, never on star/flip re-renders */
+  const front=q('.flash-face.front [data-say]');
+  const cur=front?+front.dataset.say:null;
+  if(cur!==null&&cur!==lastAuto){const prev=lastAuto;lastAuto=cur;if(prev!==null&&autoOn())say(DATA.vocab[cur].term,front);}
+  if(cur===null)lastAuto=null;
+}
+document.addEventListener('click',e=>{
+  const b=e.target.closest('[data-say]');
+  if(b){e.preventDefault();e.stopPropagation();const v=DATA.vocab[+b.dataset.say];if(v)say(v.term,b);return;}
+  const t=e.target.closest('[data-autosay]');
+  if(t){const on=t.getAttribute('aria-pressed')!=='true';try{localStorage.setItem(AUTO_KEY,on?'1':'0');}catch(err){}
+    t.setAttribute('aria-pressed',String(on));toast(on?'Đã bật tự đọc: mỗi lần chuyển thẻ sẽ đọc từ mới.':'Đã tắt tự đọc.');
+    if(on){const f=q('.flash-face.front [data-say]');if(f)say(DATA.vocab[+f.dataset.say].term,f);}}
+},true);
+
 /* review modal after submit: lookups open, nothing locked */
 const _sp=actions.showPassage;
 actions.showPassage=function(d){_sp.call(this,d);linkWords(q('#modal .passage-body'),null);};
 
 const _render=render;
-render=function(){closePop(false);_render();linkSession();};
-linkSession();
+render=function(){closePop(false);_render();linkSession();vocabSpeak();};
+linkSession();vocabSpeak();
 })();
 </script></body></html>
